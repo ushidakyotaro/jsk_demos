@@ -56,7 +56,6 @@
 (send *pr2* :larm :gripper :joint-angle 40)
 (send *irtviewer* :draw-objects)
 
-
 ; これ書けばロボットが動く
 (send *ri* :stop-grasp :arms)
 (send *ri* :angle-vector (send *pr2* :angle-vector) 1000)
