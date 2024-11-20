@@ -1,5 +1,4 @@
 #!/usr/bin/env roseus
-
 ;; PR2のモデルを読み込む
 (require "package://pr2eus/pr2.l")
 (require "package://pr2eus/pr2-utils.l")
@@ -14,17 +13,17 @@
 
 ;; 三角柱を作成（薄いハンガー形状を模擬）
 (defun make-hanger ()
-  (let ((hanger (make-prism 
+  (let ((hanger (make-prism
                  (list (float-vector 0 0 0)       ;; 下の頂点
                        (float-vector 150 0 -100)    ;; 右上の頂点
                        (float-vector -150 0 -100))  ;; 左上の頂点
                  10)))  ;; 厚さ10mm
-    
+
     ;; 三角柱の下の角に座標系を設定（把持の手前の位置）
     (send hanger :put :left-coords
           (make-cascoords
            :coords (send (send hanger :copy-worldcoords) 
-                        :translate (float-vector 80 0 -50) ;; ハンガーの
+                        :translate (float-vector -20 0 -20) ;; ハンガーの-80 0 -50
                         )  ;; ハンガーの下端から相対位置
            :rot #2f((0 0 1)   ;; y軸方向を向くための回転行列
                     (-1 0 0)
@@ -39,22 +38,23 @@
 
 (defun step1-init()
   (send *ri* :speak-jp "今日は何を着たい?")
-
   (send *pr2* :reset-pose)
+  (send *ri* :wait-interpolation)
   (send *pr2* :larm :collar-y :joint-angle 0)
-  (send *pr2* :larm :shoulder-p :joint-angle 0)
+  (send *pr2* :larm :shoulder-p :joint-angle 30)
   (send *pr2* :larm :shoulder-r :joint-angle 0)
-  (send *pr2* :larm :elbow-p :joint-angle -90)
+  (send *pr2* :larm :elbow-p :joint-angle -120)
   (send *pr2* :larm :elbow-r :joint-angle 180)
   (send *pr2* :larm :wrist-p :joint-angle -30)
   (send *pr2* :larm :wrist-r :joint-angle 180)
   (send *pr2* :larm :gripper :joint-angle 40)
+  (send *pr2* :head :neck-p :joint-angle 20)
   (send *irtviewer* :draw-objects)
 
 
   ; これ書けばロボットが動く
   (send *ri* :stop-grasp :arms)
-  (send *ri* :angle-vector (send *pr2* :angle-vector) 5000)
+  (send *ri* :angle-vector (send *pr2* :angle-vector) 4000)
   (send *ri* :wait-interpolation)
   (send *ri* :speak-jp "準備完了しました")
 )
@@ -67,31 +67,60 @@
   ;   (send *hanger* :move-to *target-coords* :world)
   ;   (send *irtviewer* :draw-objects))
 
-  ;; 左腕で三角柱を掴む
-  (send *pr2* :larm :inverse-kinematics
-        (send (send *hanger* :get :left-coords) :copy-worldcoords)
-        :rotation-axis :y)
-  
-  (send *ri* :angle-vector (send *pr2* :angle-vector) 3000)
-  (send *ri* :wait-interpolation)
-  (unix:sleep 3)
-  (send *ri* :speak-jp "ハンガーに手を伸ばしました。")
+  ;; 左腕で三角柱を掴む 既存のコード
+  ; (send *pr2* :larm :inverse-kinematics
+  ;       (send (send *hanger* :get :left-coords) :copy-worldcoords)
+  ;       :rotation-axis nil
+  ;       :use-torso t
+  ;       ) ;y
+  ; (send *ri* :angle-vector (send *pr2* :angle-vector) 3000)
+  ; (send *ri* :wait-interpolation)
+  ; (unix:sleep 3)
+  ; (send *ri* :speak-jp "ハンガーに手を伸ばしました。")
+
 
 
   ; ;; 左腕で三角柱を掴む - 逆運動学の結果を変数に保存
-  ; (let ((ik-ret (send *pr2* :larm :inverse-kinematics
-  ;                     (send (send *hanger* :get :left-coords) :copy-worldcoords)
-  ;                     :rotation-axis t
-  ;                     :debug-view t)))  ;; デバッグビューを有効に
-    
-  ;   (if ik-ret
-  ;       (progn
-  ;         (format t "IK succeeded: ~A~%" ik-ret)
-  ;         (send *ri* :angle-vector (send *pr2* :angle-vector) 5000)  ;; 5秒に延長
-  ;         (send *ri* :wait-interpolation)
-  ;         (unix:sleep 3))
-  ;       (send *ri* :speak-jp "ハンガーに手が届きません。")))  ;; IKが解けない場合
-  
+  (setq ik-ret  (send *pr2* :larm :inverse-kinematics
+                       (send (send *hanger* :get :left-coords) :copy-worldcoords)
+                       :rotation-axis nil
+                       :debug-view nil ))  ;; デバッグビューを有効に
+
+  (if ik-ret ;; ik solved
+     (progn
+           (format t "IK succeeded: ~A~%" ik-ret)
+           (send *ri* :angle-vector (send *pr2* :angle-vector) 3000) 
+           (send *ri* :wait-interpolation)
+           (unix:sleep 3)
+           )
+    (progn ;;ik failed
+      (setq ik-ret-torso (send *pr2* :larm :inverse-kinematics
+                                (send (send *hanger* :get :left-coords) :copy-worldcoords)
+                                :rotation-axis nil
+                                :use-torso t ;; 腰を使う
+                                :debug-view nil))
+      (if ik-ret-torso ;;腰を使うときのikが成功
+        (progn
+          (format t "IK succeeded with torso: ~A~%" ik-ret-torso)
+          (send *ri* :angle-vector (send *pr2* :angle-vector) 3000) 
+          (send *ri* :wait-interpolation)
+          (unix:sleep 3)
+          )
+        (progn
+          (let* target-pos (send (send *hanger* :get :left-coords) :worldpos)
+          (robot-pos (send *pr2* :worldpos))
+          (diff-x (- (elt target-pos 0) (elt robot-pos 0)))
+          (diff-y (- (elt target-pos 1) (elt robot-pos 1)))
+
+        (ros::ros-warn "send :go-velocity")
+        (send *ri* :go-velocity
+              (if (> diff-x 0) 0.1 -0.1)
+              (if (> diff-y 0)0.1 -0.1)
+              0));;
+        )
+      )
+    )
+  )
 )
 
 (defun step3-grasp ()
@@ -102,7 +131,6 @@
   (send *ri* :start-grasp :larm)
   (send *irtviewer* :draw-objects)
   (unix:sleep 1))
-
 
 (defun step4-lift ()
   (send *ri* :speak-jp "持ち上げるよ。")
@@ -149,41 +177,78 @@
 (setq *is-moving* nil)
 
 ;; コールバック関数
-(defun box-cb (msg)
+;;検知したboxとラベルを対応させるクラス                                                                                                                                         
+(defclass box-label-synchronizer
+  :super exact-time-message-filter)
 
-  (dolist (box (send msg :boxes))
-    (when (member (send box :label) '(566 615 469 923))
-      (ros::ros-info "hook is detected")
-      ;(send *ri* :speak-jp "ハンガー発見！")
-      (setq *target-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
-      (setq *target-dimensions* (send box :dimensions))
+(defmethod box-label-synchronizer
+  (:callback (box-msg label-msg)
+    (print (list box-msg label-msg))
+    (print (send-all (list box-msg label-msg) :header :stamp))
+    (box-cb box-msg label-msg)
+    ))
+
+;; (defun box-cb (msg)
+
+;;   (dolist (box (send msg :boxes))
+;;     (when (member (send box :label) '(566 615 469 923))
+;;       (ros::ros-info "hook is detected")
+;;       ;(send *ri* :speak-jp "ハンガー発見！")
+;;       (setq *target-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
+;;       (setq *target-dimensions* (send box :dimensions))
+
+;;コールバック関数                                                                                                                                                              
+;;/docker/detic_segmentor/detected_classesというトピックにidの対応あり
+
+
+(defun box-cb (box-msg label-msg)
+  (ros::ros-info "received ~A boxes, ~A labels" (length (send box-msg :boxes)) (length (send label-msg :labels)))
+  (dolist (msg-conbined (map cons #'(lambda (x y) (list  x y)) (send box-msg :boxes) (send label-msg :labels)))
+    (let (box label)
+      ;;(print (list msg-conbined))                                                                                                                                             
+      (setq box (car msg-conbined) label (cadr msg-conbined))
+      ;;(print (list box label))                                                                                                                                                
+      (print (send label :name))
+      (when (or (string= (send label :name) "hook")
+                (string= (send label :name) "coat-hanger")
+                (string= (send label :name) "hose")
+                (string= (send label :name) "handle")
+                (string= (send label :name) "scissors")
+                )
+        (setq *target-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
+        (setq *target-dimensions* (send box :dimensions))
+        (format t "target:coords ~A, dimension ~A~%" (send *target-coords* :worldcoords) (* (send *target-dimensions* :x) (send *target-dimensions* :y) (send *target-dimensions* :z)))
+        ;; 座標を表示
+        (format t "Target coords: x=~A y=~A z=~A~%"
+                (elt (send *target-coords* :worldpos) 0)
+                (elt (send *target-coords* :worldpos) 1)
+                (elt (send *target-coords* :worldpos) 2))
       
-      ;; 座標を表示
-      (format t "Target coords: x=~A y=~A z=~A~%"
-              (elt (send *target-coords* :worldpos) 0)
-              (elt (send *target-coords* :worldpos) 1)
-              (elt (send *target-coords* :worldpos) 2))
-      
-      (when (and (< (elt (send *target-coords* :worldpos) 2) 1800)
-                 (> (elt (send *target-coords* :worldpos) 2) 0)
-                 (> (elt (send *target-coords* :worldpos) 0) 500)
-                 (< (elt (send *target-coords* :worldpos) 0) 1500)
-                 (> (elt (send *target-coords* :worldpos) 1) -1500)
-                 (< (elt (send *target-coords* :worldpos) 1) 1500))
+        (when (and (< (elt (send *target-coords* :worldpos) 2) 1800)
+                   (> (elt (send *target-coords* :worldpos) 2) 0)
+                   (> (elt (send *target-coords* :worldpos) 0) 0)
+                   (< (elt (send *target-coords* :worldpos) 0) 1200)
+                   (> (elt (send *target-coords* :worldpos) 1) -1500)
+                   (< (elt (send *target-coords* :worldpos) 1) 1500))
         
-        (ros::ros-info "target is in reachable area")
-        (send *ri* :speak-jp "ハンガーが手の届く範囲にありそうます。")
+          (ros::ros-info "target is in reachable area")
+        
+          (send *ri* :speak-jp "ハンガーが手の届く範囲にありそうます。")
 
-        ;; ハンガーの位置を更新して確認
-        (send *hanger* :move-to *target-coords* :world)
-        (format t "Updated hanger position: ~A~%" (send *hanger* :worldpos))
-        (send *irtviewer* :draw-objects)
-        (unix:sleep 1)  ;; 位置更新を確認するための待機
-        (setq *found-hanger* t)))))  ;; 処理が完了したらループを抜ける
+          ;; ハンガーの位置を更新して確認
+          (send *hanger* :move-to *target-coords* :world)
+          (format t "Updated hanger position: ~A~%" (send *hanger* :worldpos))
+          (send *irtviewer* :draw-objects)
+          (unix:sleep 1)  ;; 位置更新を確認するための待機
+          (setq *found-hanger* t))
+        )
+      ))  ;; 処理が完了したらループを抜ける
+  );; defun
 
 (defun grasp-hanger ()
   (setq *is-moving* t)
   (unwind-protect
+
       (progn
         (step2-approach)
         (step3-grasp)
@@ -201,8 +266,12 @@
 
   (ros::ros-info "start searching hanger")
   (send *ri* :speak-jp "ハンガーを探します。")
-  (ros::subscribe "/synchronized_detic_label_boxes"
-                jsk_recognition_msgs::BoundingBoxArray #'box-cb)
+  ;; (ros::subscribe "/synchronized_detic_label_boxes"
+  ;;               jsk_recognition_msgs::BoundingBoxArray #'box-cb)
+  ;;サブスクライブ
+  (setq box-sync (instance box-label-synchronizer :init
+                           (list (list "/docker/detic_segmentor/output/boxes" jsk_recognition_msgs::BoundingBoxArray)
+                                 (list "/docker/detic_segmentor/detected_classes" jsk_recognition_msgs::LabelArray))))
 
   (do-until-key
   (when *found-hanger*
@@ -214,6 +283,8 @@
 
   (when *found-hanger*
     (send *ri* :speak-jp "ハンガーを掴みに行きます。")
+
+
     (grasp-hanger)
     (send *ri* :speak-jp "終了しました。")
     )
@@ -221,6 +292,3 @@
 
 ;; メイン関数を実行
 (main)
-
-
-
