@@ -41,7 +41,7 @@
     (send clothes :put :left-coords
           (make-cascoords
            :coords (send (send clothes :copy-worldcoords)
-                    :translate (float-vector (- 50 (/ width-bottom-x 2)) 0 (- (/ height-bottom-z 2) 30))  ;; ハンガーの下端から相対位置
+                    :translate (float-vector (- 60  (/ width-bottom-x 2)) 0 (- (/ height-bottom-z 2) 60))  ;; ハンガーの下端から相対位置
                     ;;:translate (float-vector -150 -20 250)
                     )
            :parent clothes))
@@ -134,7 +134,7 @@
                   (ros::ros-info "start searching clothes")
                   (send *ri* :speak-jp "服を探します。")
                   ;; (ros::subscribe "/synchronized_detic_label_boxes"
-                  ;;               jsk_recognition_msgs::BoundingBoxArray #'box-cb)
+                  ;;               jsk_recognition_msgs::BoundingBoxArray #'clothes-box-cb)
                   ;;サブスクライブ
                   (setq box-sync (instance box-label-synchronizer :init
                                            (list (list "/docker/detic_segmentor/output/boxes" jsk_recognition_msgs::BoundingBoxArray)
@@ -170,13 +170,14 @@
   (send *pr2*
         :larm
         :inverse-kinematics (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
-                                  :translate (float-vector -100 0 200))  ;; 20cm上、10cm手前
+                                  :translate (float-vector -100 0 150))  ;; 15cm上、10cm手前
         ;;:move-target (send *clothes* :get :left-coords)
         ;;:link-list (send *pr2* :link-list (send (send *pr2* :larm :end-coords) :parent))
-        :rotation-axis nil
+        :rotation-axis t
+        :use-torso t
         :debug-view nil
         )
-  (send *ri* :angle-vector (send *pr2* :angle-vector) 1000)
+  (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
   (send *ri* :wait-interpolation)
   (send *irtviewer* :draw-objects)
   )
@@ -195,7 +196,7 @@
   (send *ri* :wait-interpolation)
   (send *irtviewer* :draw-objects))
 
-(defun step6-release ()
+(defun release ()
   (send *ri* :speak-jp "服を離すよ。")
   "ハンドを開く動作（シミュレーション用）"
                                         ;(send *pr2* :larm :gripper :joint-angle 40)
@@ -219,10 +220,10 @@
   (:callback (box-msg label-msg)
              (print (list box-msg label-msg))
              (print (send-all (list box-msg label-msg) :header :stamp))
-             (box-cb box-msg label-msg)
+             (clothes-box-cb box-msg label-msg)
              ))
 
-;; (defun box-cb (msg)
+;; (defun clothes-box-cb (msg)
 
 ;;   (dolist (box (send msg :boxes))
 ;;     (when (member (send box :label) '(566 615 469 923))
@@ -235,7 +236,7 @@
 ;;/docker/detic_segmentor/detected_classesというトピックにidの対応あり
 
 
-(defun box-cb (box-msg label-msg)
+(defun clothes-box-cb (box-msg label-msg)
   (ros::ros-info "received ~A boxes, ~A labels" (length (send box-msg :boxes)) (length (send label-msg :labels)))
   (dolist (msg-conbined (map cons #'(lambda (x y) (list  x y)) (send box-msg :boxes) (send label-msg :labels)))
     (let (box label)
@@ -244,10 +245,11 @@
       ;;(print (list box label))                                                                                                                                                
       (print (send label :name))
       (when (or (string= (send label :name) "bathrobe")
-                (string= (send label :name) "jacket")
+                ;;(string= (send label :name) "jacket")
                 (string= (send label :name) "coat")
-                (string= (send label :name) "shirt")
+                ;;(string= (send label :name) "shirt")
                 (string= (send label :name) "robe")
+                (string= (send label :name) "sweatshirt")
                 )
         (setq *target-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
         (setq *target-dimensions* (send box :dimensions))
@@ -280,6 +282,8 @@
       ))  ;; 処理が完了したらループを抜ける
   );; defun
 
+  
+
 (defun grasp-clothes ()
   (setq *is-moving* t)
   (unwind-protect
@@ -288,11 +292,87 @@
         (step2-approach)
         (step3-grasp)
         (unix:sleep 2)
-        (step4-lift)
-        ;;(step5-pull)
+        ;;(step4-lift)
         (unix:sleep 2)
-        (step6-release))
+        )
     (setq *is-moving* nil)))
+
+
+(defun person-box-cb (box-msg label-msg)
+  (ros::ros-info "received ~A boxes, ~A labels" (length (send box-msg :boxes)) (length (send label-msg :labels)))
+  (dolist (msg-conbined (map cons #'(lambda (x y) (list  x y)) (send box-msg :boxes) (send label-msg :labels)))
+    (let (box label)
+      ;;(print (list msg-conbined))                                                                                                                                             
+      (setq box (car msg-conbined) label (cadr msg-conbined))
+      ;;(print (list box label))                                                                                                                                                
+      (print (send label :name))
+      (when (string= (send label :name) "person")
+        (setq *person-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
+        (setq *person-dimensions* (send box :dimensions))
+        (format t "person:coords ~A, dimension ~A~%" (send *person-coords* :worldcoords) (* (send *person-dimensions* :x) (send *person-dimensions* :y) (send *target-dimensions* :z)))
+        ;; 座標を表示
+        (format t "person coords: x=~A y=~A z=~A~%"
+                (elt (send *person-coords* :worldpos) 0)
+                (elt (send *person-coords* :worldpos) 1)
+                (elt (send *person-coords* :worldpos) 2))
+        
+        ;;(when (and (< (elt (send *person-coords* :worldpos) 2) 1800)
+        ;;           (> (elt (send *person-coords* :worldpos) 2) 0)
+                   ;; (> (elt (send *person-coords* :worldpos) 0) 0)
+                   ;; (< (elt (send *person-coords* :worldpos) 0) 1200)
+                   ;; (> (elt (send *person-coords* :worldpos) 1) -1500)
+                   ;; (< (elt (send *person-coords* :worldpos) 1) 1500)
+          ;;         )
+          ;;(ros::ros-info "person is in reachable area")
+
+          ;; 人の位置を更新して確認
+          (setq *person* (make-person))
+          (objects (append (list *pr2*) (list *person*)))
+          (send *irtviewer* :draw-objects)
+          ;; (send *person* :move-to *target-coords* :world)
+          ;; (format t "Updated person position: ~A~%" (send *person* :worldpos))
+          ;; (send *irtviewer* :draw-objects)
+          ;; (unix:sleep 1)  ;; 位置更新を確認するための待機
+          (setq *found-person* t))
+        ;;)
+      ))  ;; 処理が完了したらループを抜ける
+  );; defun
+
+(defun make-person ()
+  (let ((person (make-cube 200 200 200)))
+    (when (boundp '*person-coords*)
+      (send person :move-to *person-coords* :world)
+      person)))
+
+(defun move-to-person ()
+  (send *ri* :speak-jp "人に近づくよ。")
+  (let* (person-pos (send *person-coords* :worldpos))
+        (robot-pos (send *pr2* :worldpos))
+        (diff-x (- (elt person-pos 0) (elt robot-pos 0)))
+        (diff-y (- (elt person-pos 1) (elt robot-pos 1)))
+        (distance (sqrt (+ (* diff-x diff-x) (* diff-y diff-y))))
+        ;;1.5mの距離まで近づく
+        (ratio (/ 1500 distance))
+        (target-x (* ratio diff-x))
+        (target-y (* ratio diff-y)))
+
+  (send *ri* :go-pos target-x target-y 0)
+)
+
+(defun search-person-with-timeout ()
+  (let ((start-time (ros::time-now))
+        (timeout 5.0))  ;; 5秒のタイムアウト
+    (setq *found-person* nil)
+    (do-until-key
+     (when (or *found-person*
+               (> (send (ros::time- (ros::time-now) start-time) :to-sec)
+                  timeout))
+       (return))
+     (send *pr2* :angle-vector (send *ri* :state :potentio-vector))
+     (send *irtviewer* :draw-objects)
+     (x::window-main-one)
+     (ros::spin-once))
+    *found-person*))  ;; 人が見つかったかどうかを返す
 
 (defun main ()
   (ros::ros-info "start main loop")
@@ -303,7 +383,7 @@
   (ros::ros-info "start searching clothes")
   (send *ri* :speak-jp "服を探します。")
   ;; (ros::subscribe "/synchronized_detic_label_boxes"
-  ;;               jsk_recognition_msgs::BoundingBoxArray #'box-cb)
+  ;;               jsk_recognition_msgs::BoundingBoxArray #'clothes-box-cb)
   ;;サブスクライブ
   (setq box-sync (instance box-label-synchronizer :init
                            (list (list "/docker/detic_segmentor/output/boxes" jsk_recognition_msgs::BoundingBoxArray)
@@ -319,11 +399,27 @@
 
   (when *found-clothes*
     (send *ri* :speak-jp "服を掴みに行きます。")
-
-
     (grasp-clothes)
-    (send *ri* :speak-jp "終了しました。")
-    )
+  )
+
+      ;; 人を探すプロセス
+  ;   (send *ri* :speak-jp "人を探します。")
+  ;   (setq *found-person* nil)
+  ;   ;; main関数内の人を探すプロセスの前に追加
+  ;   (setq box-sync (instance box-label-synchronizer :init
+  ;                        (list (list "/docker/detic_segmentor/output/boxes" jsk_recognition_msgs::BoundingBoxArray)
+  ;                              (list "/docker/detic_segmentor/detected_classes" jsk_recognition_msgs::LabelArray))))
+  ; (if (search-person-with-timeout)
+  ;   (progn
+  ;     (send *ri* :speak-jp "人を見つけました。")
+  ;     (move-to-person))
+  ; (progn ;;人ｇ見つからなかった場合
+  ;   (send *ri* :speak-jp "人を見つけられませんでした。")))
+  
+  (release)
+
+  (send *ri* :speak-jp "終了しました。")
+    
   )
 
 ;; メイン関数を実行
