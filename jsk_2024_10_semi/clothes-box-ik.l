@@ -11,7 +11,7 @@
 (if (not (boundp '*pr2*)) (setq *pr2* (pr2)))
 
 
-;; 三角柱を作成（かかっている服の形状を模擬）
+;; 直方体を作成（かかっている服の形状を模擬）
 (defun make-clothes ()
   (let* ((width-x 400) ;; 上辺の幅
          (height-top-z 100) ;; 服からハンガー部分までの高さ
@@ -35,13 +35,13 @@
         ;            thickness-y)))  ;; 厚さ
 
         (clothes (make-cube width-bottom-x thickness-y height-bottom-z))
-  )
+        )
 
-    ;; 三角柱の下の角に座標系を設定（把持の手前の位置）
+    ;; 直方体の下の角に座標系を設定（把持の手前の位置）
     (send clothes :put :left-coords
           (make-cascoords
            :coords (send (send clothes :copy-worldcoords)
-                    :translate (float-vector (- 60  (/ width-bottom-x 2)) 0 (- (/ height-bottom-z 2) 60))  ;; ハンガーの下端から相対位置
+                    :translate (float-vector (- 80 (/ width-bottom-x 2)) 0 (- (/ height-bottom-z 2) 85))  ;; ハンガーの下端から相対位置
                     ;;:translate (float-vector -150 -20 250)
                     )
            :parent clothes))
@@ -50,8 +50,6 @@
       (send clothes :move-to *target-coords* :world)
       
       clothes))
-
-
   )
 
 ;; 初期位置に配置
@@ -88,30 +86,53 @@
                          (setq ik-ret (send *pr2* :larm :inverse-kinematics
                                             (send (send *clothes* :get :left-coords) :copy-worldcoords)
                                             :rotation-axis nil
-                                            :debug-view nil))  
+                                            :debug-view nil
+                                            :use-torso t
+                                            ))
 
                          (if ik-ret ;; ik solved
                              (progn
                                (format t "IK succeeded: ~A~%" ik-ret)
+                               (send *pr2* :larm :inverse-kinematics
+                                                  (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
+                                                        :translate (float-vector -100 0 0))
+                                                  :rotation-axis nil
+                                                  :debug-view nil
+                                                  :use-torso t
+                                                  )
+
                                (send *ri* :angle-vector (send *pr2* :angle-vector) 3000) 
+                               (send *ri* :wait-interpolation)
+                               (send *pr2* :larm :inverse-kinematics
+                                                  (send (send *clothes* :get :left-coords) :copy-worldcoords)
+                                                  :rotation-axis nil
+                                                  :debug-view nil
+                                                  :use-torso t
+                                                  )
+                               
+                               (send *ri* :angle-vector (send *pr2* :angle-vector) 2000) 
+                              
                                (send *ri* :wait-interpolation)
                                (unix:sleep 3)
                                t)  ;; 成功を返す
                            
-                           (progn ;;ik failed
-                             (setq ik-ret-torso (send *pr2* :larm :inverse-kinematics
-                                                      (send (send *clothes* :get :left-coords) :copy-worldcoords)
-                                                      :rotation-axis nil
-                                                      :use-torso t ;; 腰を使う
-                                                      :debug-view nil))
-                             (if ik-ret-torso ;;腰を使うときのikが成功
-                                 (progn
-                                   (format t "IK succeeded with torso: ~A~%" ik-ret-torso)
-                                   (send *ri* :angle-vector (send *pr2* :angle-vector) 3000) 
-                                   (send *ri* :wait-interpolation)
-                                   (unix:sleep 3)
-                                   t)  ;; 成功を返す
-                               nil)))))  ;; 失敗を返す
+                           ;; (progn ;;ik failed
+                           ;;   (setq ik-ret-torso (send *pr2* :larm :inverse-kinematics
+                           ;;                            (send (send *clothes* :get :left-coords) :copy-worldcoords)
+                           ;;                            :rotation-axis nil
+                           ;;                            :use-torso t ;; 腰を使う
+                           ;;                            :debug-view nil))
+                           ;;   (if ik-ret-torso ;;腰を使うときのikが成功
+                           ;;       (progn
+                           ;;         (format t "IK succeeded with torso: ~A~%" ik-ret-torso)
+                           ;;         (send *ri* :angle-vector (send *pr2* :angle-vector) 3000) 
+                           ;;         (send *ri* :wait-interpolation)
+                           ;;         (unix:sleep 3)
+                           ;;         t)  ;; 成功を返す
+                           nil)))
+          
+          ;;))
+          ;; 失敗を返す
 
           ;; 最大試行回数を設定
           (let ((max-attempts 5)
@@ -151,7 +172,7 @@
             
             ;; 最終結果の確認
             (if (>= attempt-count max-attempts)
-                (send *ri* :speak-jp "服に届きませんでした。")
+              (send *ri* :speak-jp "服に届きませんでした。")
               (send *ri* :speak-jp "服に到達しました。"))))
   )
 
@@ -162,21 +183,46 @@
   (send *pr2* :larm :end-coords :assoc *clothes*)
   (send *ri* :start-grasp :larm)
   (send *irtviewer* :draw-objects)
-  (unix:sleep 1))
+  (unix:sleep 1)
+  
+  )
+
+
 
 (defun step4-lift ()
   (send *ri* :speak-jp "持ち上げるよ。")
-  "斜め上に移動"
+   (send *pr2* :rarm :inverse-kinematics
+         (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
+               :translate (float-vector -10 0 -150))
+         :rotation-axis t
+         :debug-view nil
+         :use-torso t
+         )
+   (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
+   (send *ri* :wait-interpolation)
+   (send *pr2* :rarm :inverse-kinematics
+         (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
+               :translate (float-vector 50 0 -100))
+         :rotation-axis t
+         :debug-view nil
+         :use-torso t
+         )
+   (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
+   
+   (send *ri* :wait-interpolation)
+
+  
   (send *pr2*
-        :larm
-        :inverse-kinematics (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
-                                  :translate (float-vector -100 0 150))  ;; 15cm上、10cm手前
-        ;;:move-target (send *clothes* :get :left-coords)
-        ;;:link-list (send *pr2* :link-list (send (send *pr2* :larm :end-coords) :parent))
+        ;;:larm
+        :inverse-kinematics (send (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
+                                        :translate (float-vector 0 0 150))
+                                  :rotate (deg2rad -30) :y
+                                  )
         :rotation-axis t
         :use-torso t
         :debug-view nil
         )
+  
   (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
   (send *ri* :wait-interpolation)
   (send *irtviewer* :draw-objects)
@@ -186,14 +232,21 @@
   (send *ri* :speak-jp "手元に引くよ。")
   "手元に引く"
   (send *pr2*
+        :larm
         :inverse-kinematics (send (send (send *clothes* :get :left-coords) :copy-worldcoords)
-                                  :translate (float-vector -100 0 50))  ;; さらに30cm手前
+                                  :translate (float-vector -100 0 0))  ;; さらに30cm手前
                                         ;:move-target (send *clothes* :get :left-coords)
                                         ;:link-list (send *pr2* :link-list (send (send *pr2* :larm :end-coords) :parent))
-        :rotation-axis t
-        :debug-view t)
-  (send *ri* :angle-vector (send *pr2* :angle-vector) 1000)
+        :rotation-axis nil
+        :debug-view nil)
+  (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
   (send *ri* :wait-interpolation)
+  ;; (send *pr2*
+  ;;       :rarm
+  ;;       :reset-pose)
+ ;; (send *ri* :angle-vector (send *pr2* :angle-vector) 2000)
+  (send *ri* :wait-interpolation)
+  
   (send *irtviewer* :draw-objects))
 
 (defun release ()
@@ -246,9 +299,9 @@
       (print (send label :name))
       (when (or (string= (send label :name) "bathrobe")
                 ;;(string= (send label :name) "jacket")
-                (string= (send label :name) "coat")
+                ;;(string= (send label :name) "coat")
                 ;;(string= (send label :name) "shirt")
-                (string= (send label :name) "robe")
+                ;;(string= (send label :name) "robe")
                 (string= (send label :name) "sweatshirt")
                 )
         (setq *target-coords* (send (ros::tf-pose->coords (send box :pose)) :copy-worldcoords))
@@ -292,7 +345,8 @@
         (step2-approach)
         (step3-grasp)
         (unix:sleep 2)
-        ;;(step4-lift)
+        (step4-lift)
+        (step5-pull)
         (unix:sleep 2)
         )
     (setq *is-moving* nil)))
